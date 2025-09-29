@@ -136,11 +136,19 @@ def Question_Rewriting(question: str):
     }
 
 
-def enhanced_answer_pipeline(user_question: str, context: str) -> str:
+def enhanced_answer_pipeline(user_question: str, vector_db, k: int = 5):
     processed = Question_Rewriting(user_question)
+    # Step 2: Retrieve context using FAISS (local, free)
+    similar_docs = vector_db.similarity_search(processed["rewritten_question"], k=k)
+    context = "\n\n".join([doc.page_content for doc in similar_docs])
+
     qa_chain = build_qa_chain()
-    return qa_chain.run(
-        context=context,
-        question=processed["rewritten_question"],
-        keywords=", ".join(processed["keywords"]),
-    )
+
+    return {
+        "answer": qa_chain.run(
+            context=context,
+            question=processed["rewritten_question"],
+            keywords=", ".join(processed["keywords"]),
+        ),
+        "source_docs": context,
+    }
