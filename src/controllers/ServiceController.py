@@ -15,10 +15,13 @@ from langchain.chains.question_answering import load_qa_chain
 from langchain_core.prompts import PromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.chains import LLMChain
+from langchain.retrievers import BM25Retriever
 
 load_dotenv("../assets/.env")
 settings = get_settings()
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
+)
 
 # ============================================================
 # Configuration
@@ -36,8 +39,7 @@ HGFACE_API_KEY = settings.HGFACE_API_KEY
 # Setup
 # ============================================================
 embeddings = HuggingFaceEmbeddings(model_name=HF_MODEL)
-hf_client = InferenceClient(model=HF_MODEL, token=HGFACE_API_KEY) 
-
+hf_client = InferenceClient(model=HF_MODEL, token=HGFACE_API_KEY)
 
 
 # ============================================================
@@ -52,8 +54,7 @@ def load_documents() -> list[Document]:
     documents = []
     for chunk in chunks:
         match = re.search(
-            r'((?:مادة|المادة)\s*\([\d\u0660-\u0669\u06F0-\u06F9]+\))\s*[:：]?',
-            chunk
+            r"((?:مادة|المادة)\s*\([\d\u0660-\u0669\u06F0-\u06F9]+\))\s*[:：]?", chunk
         )
         article_number = match.group(1) if match else "unknown"
         article_id = f"المادة ({article_number})"
@@ -61,20 +62,16 @@ def load_documents() -> list[Document]:
         documents.append(
             Document(
                 page_content=chunk,
-                metadata={
-                    "article_number": article_number,
-                    "article_id": article_id
-                }
+                metadata={"article_number": article_number, "article_id": article_id},
             )
         )
     return documents
 
+
 def load_vector_db() -> Chroma:
     logging.log(logging.INFO, "db loaded")
-    return Chroma(
-        persist_directory=VECTOR_DB_DIR,
-        embedding_function=embeddings
-    )
+    return Chroma(persist_directory=VECTOR_DB_DIR, embedding_function=embeddings)
+
 
 def create_vector_db(documents: list[Document]) -> Chroma:
     ids = [str(i) for i in range(len(documents))]
@@ -82,41 +79,43 @@ def create_vector_db(documents: list[Document]) -> Chroma:
         documents=documents,
         embedding=embeddings,
         persist_directory=VECTOR_DB_DIR,
-        ids=ids
+        ids=ids,
     )
 
 
-def build_qa_chain(context,question):
-    """Return a QA chain with Gemini + custom prompt."""
+def build_qa_chain() -> LLMChain:
     prompt = PromptTemplate(
         template=(
-            "Answer the next question using the provided context.\n"
+            "Answer the following legal question using ONLY the provided context.\n"
             "If the answer is not contained in the context, say 'NO ANSWER IS AVAILABLE'.\n\n"
             "### Context:\n{context}\n\n"
             "### Question:\n{question}\n\n"
+            "### Keywords:\n{keywords}\n\n"
             "### Answer:\n"
         ),
-        input_variables=["context", "question"]
+        input_variables=["context", "question", "keywords"],
     )
-    
-    
-    
-    logging.log(logging.INFO, f"GEMINI_API_KEY: {GEMINI_API_KEY}, GEMINI_MODEL:{GEMINI_MODEL}")
+
     llm = ChatGoogleGenerativeAI(model=GEMINI_MODEL, google_api_key=GEMINI_API_KEY)
-    return load_qa_chain(llm, chain_type="stuff", prompt=prompt)
+    return LLMChain(llm=llm, prompt=prompt)
 
 
-def Question_Rewriting(question: str) -> str:
+def Question_Rewriting(question: str):
     prompt = PromptTemplate(
         template=(
             "You are a legal assistant specialized in Egyptian Labor Law.\n"
-            "Your task is to reformulate the user's question so that it matches the terminology and keywords "
+            "1. Reformulate the user's question so it matches the terminology and keywords "
             "commonly used in Egyptian Labor Law articles.\n"
-            "Prefer to use exact legal terms (مثل: 'المادة', 'صاحب العمل', 'العامل', 'عقد العمل', 'الأجر', 'الفصل من العمل').\n"
-            "Do NOT answer the question.\n"
-            "Just rewrite it into a clearer and more formal legal query.\n\n"
+            "   - Prefer exact legal terms (مثل: 'المادة', 'صاحب العمل', 'العامل', 'عقد العمل', 'الأجر', 'الفصل من العمل').\n"
+            "2. Extract the most important keywords from the rewritten question (3–7 max).\n"
+            "   - Keep them concise.\n"
+            "   - Focus on legal terms and entities.\n"
+            "Do NOT answer the question itself.\n\n"
             "### Original Question:\n{question}\n\n"
             "### Rewritten Question:\n"
+            "(write the formal legal version here)\n\n"
+            "### Keywords:\n"
+            "(list the keywords here, separated by commas)\n"
         ),
         input_variables=["question"],
     )
@@ -125,4 +124,23 @@ def Question_Rewriting(question: str) -> str:
     chain = LLMChain(llm=llm, prompt=prompt)
 
     rewritten = chain.run(question=question)
-    return rewritten
+    # Parse response into dict
+    parts = rewritten.split("### Keywords:")
+    rewritten_question = parts[0].replace("### Rewritten Question:", "").strip()
+    keywords = parts[1].strip() if len(parts) > 1 else ""
+    keywords = [kw.strip() for kw in keywords.split(",") if kw.strip()]
+    print(f"rewritten_question: {rewritten_question}, keywords: {keywords}")
+    return {
+        "rewritten_question": rewritten_question,
+        "keywords": keywords,
+    }
+
+
+def enhanced_answer_pipeline(user_question: str, context: str) -> str:
+    processed = Question_Rewriting(user_question)
+    qa_chain = build_qa_chain()
+    return qa_chain.run(
+        context=context,
+        question=processed["rewritten_question"],
+        keywords=", ".join(processed["keywords"]),
+    )
