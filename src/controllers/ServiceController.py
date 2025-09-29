@@ -5,17 +5,15 @@ from dotenv import load_dotenv
 from helpers.config import get_settings
 from fastapi import APIRouter, status
 from fastapi.responses import JSONResponse
-
 from huggingface_hub import InferenceClient
 from langchain.schema import Document
-from langchain.embeddings import HuggingFaceEmbeddings
+from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.document_loaders import TextLoader
 from langchain_community.vectorstores import Chroma
 from langchain.chains.question_answering import load_qa_chain
 from langchain_core.prompts import PromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.chains import LLMChain
-from langchain.retrievers import BM25Retriever
 
 load_dotenv("../assets/.env")
 settings = get_settings()
@@ -86,8 +84,15 @@ def create_vector_db(documents: list[Document]) -> Chroma:
 def build_qa_chain() -> LLMChain:
     prompt = PromptTemplate(
         template=(
-            "Answer the following legal question using ONLY the provided context.\n"
-            "If the answer is not contained in the context, say 'NO ANSWER IS AVAILABLE'.\n\n"
+            "You are a legal assistant specialized in Egyptian Labor Law.\n"
+            "Your task is to answer the user's question using context and any directly related information it implies to answer the question clearly and accurately.\n"
+            "The context may contain multiple articles or examples; focus on the parts most relevant to the question and keywords.\n"
+            "Stay grounded in the context and its related meaning. If the context and related information do not contain an answer, reply: 'NO ANSWER IS AVAILABLE'.\n\n"
+            "Guidelines:\n"
+            "1. Always rely strictly on the context. Do not use outside knowledge.\n"
+            "2. Use the keywords to identify the most relevant legal rules or articles in the context.\n"
+            "3. If the context does not provide enough information to answer, reply exactly with: NO ANSWER IS AVAILABLE.\n"
+            "4. Keep the answer clear, concise, and in Modern Standard Arabic.\n\n"
             "### Context:\n{context}\n\n"
             "### Question:\n{question}\n\n"
             "### Keywords:\n{keywords}\n\n"
